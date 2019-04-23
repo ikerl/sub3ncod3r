@@ -1,0 +1,157 @@
+#!/usr/bin/python
+
+import re
+import random
+import getopt, sys
+
+
+# Lee el fichero de goodChars
+def loadGoodChars(file):
+    chars = []
+    with open(file, 'r') as charfile:
+        for line in charfile:
+            chars += re.findall(r'\\x([0-9a-fA-F]*)', line)
+    print "[*] Se han encontrado {} good chars de 256 posibles".format(len(chars))
+    if len(chars) is 0:
+        print "[-] No hay chars disponibles"
+        return 1
+    return chars
+
+# Compara si un char esta en el array de goodchars
+def compareChars(good, toTest):
+    toTest = toTest[2:]
+    toTest = re.findall('..', toTest)
+    for item in toTest:
+        if item not in good:
+            return False
+
+    return True
+
+# Lee el fichero de shellcode y lo procesa
+def processShellCode(file):
+    byteBlocks = []
+    try:
+        a = []
+        with open(file, 'r') as shellcode:
+            for line in shellcode:
+                a = re.findall('.' * 16, line)
+        for item in a:
+            woot = item.split('\\x')[::-1]
+            byteBlocks.append(str("0x" + ''.join(woot)))
+        
+        if len(byteBlocks) == 0:
+            print "[-] No se ha identificado ningun bloque de 8 bytes con el formato: '\\xab\\xcd\\xef\\x90'"
+            return 1
+
+        print "[*] La shellcode se ha cargado con exito con {} bytes\n\n\033[93m".format(len(byteBlocks)*4)
+    except:
+        print "[-] Error al leer el fichero del shellcode"
+    
+    return byteBlocks[::-1]
+
+
+def calculateSub(reachMe, goodChars):
+    try:
+        aux = hex(reachMe)
+    except:
+        return 1
+    double = False
+    if reachMe > int('0xffffffff',16) /2:
+        reachMe = int('0xffffffff', 16) - reachMe
+        reachMe = -reachMe
+        double = True
+    count = 1
+    while True:
+        count += 1
+        seedA = random.randint(1, int('0xffffffff',16)) 
+        if len(hex(seedA)) == 10:
+
+            if compareChars(goodChars, hex(seedA)):
+                nexti = int('0xffffffff', 16) - seedA
+                nexti = nexti - reachMe
+                nexti = nexti / 2
+                if compareChars(goodChars, hex(nexti)) and compareChars(goodChars, hex(nexti+2)) and compareChars(goodChars, hex(nexti+1)) and len(hex(nexti)) == 10:
+                    if hex(int('0xffffffff', 16) - seedA - nexti - (nexti+1))  == hex(reachMe):
+                        if double:
+                            printPythonFormat(hex(seedA), hex(nexti), hex(nexti+3), aux)
+                        else:
+                            printPythonFormat(hex(seedA), hex(nexti), hex(nexti+2), aux)
+                        print ''
+                        break
+
+def formatoSub(sub):
+    strsub = ""
+    text = ""
+    itembytes = re.findall('..', sub[2::])[::-1]
+    for byte in itembytes:
+        text = str(byte) + text
+        strsub += "\\x" + str(byte)
+    return strsub, text
+
+def printPythonFormat(sub1,sub2,sub3,aux):
+    print "\"\\x25\\x4A\\x4D\\x4E\\x55\"    # AND EAX,554E4D4A"
+    print "\"\\x25\\x35\\x32\\x31\\x2A\"    # AND EAX,2A313235"
+
+    value, text = formatoSub(sub1)
+    print "\"\\x2D{}\"    # SUB EAX,{}".format(value, text)
+    value, text = formatoSub(sub2)
+    print "\"\\x2D{}\"    # SUB EAX,{}".format(value, text)
+    value, text = formatoSub(sub3)
+    print "\"\\x2D{}\"    # SUB EAX,{}".format(value, text)
+    print "\"\\x50\"    # PUSH {}".format(aux)
+
+def printRaw(sub):
+    print "\"\\x25\\x4A\\x4D\\x4E\\x55\"    # AND EAX,554E4D4A"
+    print "\"\\x25\\x35\\x32\\x31\\x2A\"    # AND EAX,2A313235"
+    value, text = formatoSub(sub)
+    print "\"\\x05{}\"    # ADD EAX,{}".format(value,text)
+    print "\"\\x50\"    # PUSH {}\n".format(text)
+
+def printUsage():
+    print "[+] USAR: {} -g [GoodChars_file] -i [shellcode_file] ".format(__file__)
+    print "[+] Los dos ficheros tienen que ser del formato \"\\xeb\\x80\\x90\\x41\" "
+    sys.exit()
+
+def main():
+    try:
+        opts, args = getopt.getopt(sys.argv[1:], "hi:g:", ["help", "inputFile=", "goodchars="])
+    except getopt.GetoptError:
+        printUsage()
+        sys.exit(2)
+    a1 = False
+    a2 = False
+    for o,a in opts:
+        if o in ("-g", "--goodchars"):
+            goodcharsFile = a
+            a1 = True
+        if o in ("-h", "--help"):
+            printUsage()
+            sys.exit()
+        if o in ("-i", "--inputFile"):
+            inputFile = a
+            a2 = True
+        
+    if not (a1 and a2):
+        printUsage()
+        sys.exit()
+    
+    print "[+] Se van a usar los goodChars del fichero {}".format(goodcharsFile)
+    print "[+] Se va a encodear el fichero {}".format(inputFile)
+
+    goodChars = []
+
+    try:
+        goodChars = loadGoodChars(goodcharsFile)
+    except:
+        print "[-] Error al leer el fichero de goodChars"
+        return 1
+    
+    for bloque in processShellCode(inputFile):
+        # Si el bloque no tiene badchars lo imprimimos tal cual
+        if compareChars(goodChars, hex(int(bloque, 16))):
+            printRaw(hex(int(bloque, 16)))
+        else:
+            calculateSub(int(bloque, 16), goodChars)
+
+if '__main__' == __name__:
+    main()
